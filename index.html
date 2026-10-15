@@ -183,7 +183,7 @@ table.list input.n{width:60px}
         <li>M 고정: 평일 M · 토·일·공휴일 OFF</li>
         <li>하루 인원: D · E · N 각각 설정의 최소 인원 이상 (기본 2명)</li>
         <li>N 다음 날은 N 또는 OFF · E 다음 날 D 없음</li>
-        <li>연속 근무 최대 5일 · N 연속 최대 3일 · N 끝나면 OFF 2일 쪽으로</li>
+        <li>연속 근무는 3일 기본 (신청이 몰려 불가피할 때만 4일 · 5일 이상 없음) · N 연속 최대 3일 · N 끝나면 OFF 2일 쪽으로</li>
         <li>OFF 수: Day · Evening 근무자 = OFF수 / Night = Night OFF (사람마다 다르면 근무표 'OFF 목표' 칸)</li>
         <li>연차 칸은 OFF 수에 들어가지 않음 (따로 셈)</li>
         <li>지난달 마지막 근무와 이어지게 (예: 지난달 말 N 뒤 1일 D 없음)</li>
@@ -292,7 +292,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function defaultSettings() {
     return {
       minD: 2, maxD: 3, minE: 2, maxE: 3, minN: 2, maxN: 3,
-      maxWork: 5,      // 최대 연속 근무일
+      idealWork: 3,    // 권장 연속 근무일 (10-16 사용자: 5일 연속은 힘듦 · 3일씩 균형)
+      maxWork: 4,      // 최대 연속 근무일 (권장을 못 지킬 때만 · 넘으면 배치 안 함)
       maxNRun: 3,      // N 최대 연속
       nOff: 15,        // Night 기본 OFF 수
       weekendMinDefault: 2,
@@ -454,7 +455,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     for (d = nD - 1; d >= 0; d--) restLeft[d] = (rest[d] ? 1 : 0) + (d + 1 < nD ? restLeft[d + 1] : 0);
     var minS = [], maxS = [];
     minS[C_D] = +S.minD; maxS[C_D] = +S.maxD; minS[C_E] = +S.minE; maxS[C_E] = +S.maxE; minS[C_N] = +S.minN; maxS[C_N] = +S.maxN;
-    var MAXW = +S.maxWork || 5, MAXN = +S.maxNRun || 3;
+    var MAXW = +S.maxWork || 4, MAXN = +S.maxNRun || 3, IDEAL = Math.min(+S.idealWork || 3, MAXW);
 
     var P = people.map(function (p) {
       var row = mon.rows[p.id], base = [], fixed = [], tail = [];
@@ -526,7 +527,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var ob = runBack(q, g, d, isOffish);
       if (ob >= 3) b += 0.3; else if (ob >= 2) b += 0.12;
       var wb = runBack(q, g, d, isWork);
-      if (wb >= MAXW - 1) b -= 0.25;
+      if (wb >= IDEAL) b -= 0.8; else if (wb === IDEAL - 1) b -= 0.1;
       return b;
     }
 
@@ -559,6 +560,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           nr = c === C_N ? nr + 1 : 0;
           if (!inMonth) continue;
           if (wr > MAXW) pen += 500;
+          if (wr > IDEAL) pen += 150;
           if (nr > MAXN) pen += 300;
           if (pc === C_N && isWork(c) && c !== C_N) pen += 1000;
           if (pc === C_E && c === C_D) pen += 1000;
@@ -612,6 +614,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           if (f.R <= 0) { g[d] = C_OFF; return; }
           var ratio = f.R / Math.max(1, f.F), must = f.R >= f.F;
           var want = must || ratio > 0.42 + rand() * 0.4 - (runBack(f.q, g, d, isOffish) >= 2 ? 0.25 : 0);
+          if (want && !must && runBack(f.q, g, d, isWork) >= IDEAL) want = false;
           if (!want) { g[d] = C_OFF; return; }
           var best = -1, bs = -1e9;
           f.q.allowed.forEach(function (s) {
@@ -658,8 +661,45 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           while (diff > 0 && guard-- > 0) { if (!giveWork(G, cnt, q, pi)) break; diff--; changed = true; }
           while (diff < 0 && guard-- > 0) { if (!giveOff(G, cnt, q, pi, -1)) break; diff++; changed = true; }
         });
+        // ③ 권장 연속 근무(3일)를 넘는 곳 쪼개기: 긴 줄의 하루를 OFF 로 · 다른 OFF 하루를 근무로 (인원 · OFF 수 그대로)
+        W.forEach(function (q) { if (breakRuns(G, cnt, q, P.indexOf(q))) changed = true; });
         if (!changed) break;
       }
+    }
+    function breakRuns(G, cnt, q, pi) {
+      var g = G[pi], did = false;
+      for (var guard = 0; guard < 12; guard++) {
+        var run = 0, region = null;
+        for (var d = -q.tail.length; d < nD; d++) {
+          run = isWork(at(q, g, d)) ? run + 1 : 0;
+          if (d >= 0 && run > IDEAL) { var e = d; while (e + 1 < nD && isWork(g[e + 1])) e++; region = { s: Math.max(0, d - run + 1), e: e }; break; }
+        }
+        if (!region) break;
+        var best = null, bs = 1e9;
+        for (var x = region.s; x <= region.e; x++) {
+          if (q.fixed[x] || !isWork(g[x])) continue;
+          var sx = g[x];
+          if (cnt[x][sx] <= minS[sx]) continue;
+          var left = runBack(q, g, x, isWork), right = runFwd(g, x, isWork), worst = Math.max(left, right);
+          g[x] = C_OFF;
+          for (var y = 0; y < nD; y++) {
+            if (y === x || q.fixed[y] || g[y] !== C_OFF) continue;
+            for (var k = 0; k < q.allowed.length; k++) {
+              var s = q.allowed[k];
+              if (cnt[y][s] >= maxS[s] || !eligible(q, g, y, s)) continue;
+              if (runBack(q, g, y, isWork) + 1 + runFwd(g, y, isWork) > IDEAL) continue;
+              var sc = worst * 10 + (cnt[y][s] - minS[s]) + (s === sx ? 0 : 0.5);
+              if (sc < bs) { bs = sc; best = { x: x, sx: sx, y: y, s: s }; }
+            }
+          }
+          g[x] = sx;
+        }
+        if (!best) break;
+        setCell(G, cnt, pi, best.x, C_OFF);
+        setCell(G, cnt, pi, best.y, best.s);
+        did = true;
+      }
+      return did;
     }
     function giveWork(G, cnt, q, pi) {
       var g = G[pi], best = null, bs = -1e9;
@@ -729,8 +769,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (pc === C_N && (c === C_D || c === C_E || c === C_M)) rule.push((d + 1) + '일 N 다음 ' + CODE_STR[c]);
         if (pc === C_E && c === C_D) rule.push((d + 1) + '일 E 다음 D');
       }
-      var tgt = targetOff(st, mon, p);
-      persons.push({ id: p.id, name: p.name, offs: offs, target: tgt, leave: leave, rule: rule, empty: row.cells.slice(0, nD).filter(function (v) { return !v; }).length });
+      var tgt = targetOff(st, mon, p), long = [], run = 0, ideal = +S.idealWork || 3;
+      if (p.type !== 'M') for (d = 0; d <= nD; d++) {
+        if (d < nD && isWork(code(row.cells[d]))) { run++; continue; }
+        if (run > ideal) long.push((d - run + 1) + '~' + d + '일 ' + run + '일 연속');
+        run = 0;
+      }
+      persons.push({ id: p.id, name: p.name, offs: offs, target: tgt, leave: leave, rule: rule, long: long, empty: row.cells.slice(0, nD).filter(function (v) { return !v; }).length });
     });
     return { day: day, short: short, persons: persons };
   }
@@ -741,6 +786,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var st = JSON.parse(s);
     if (!st || st.app !== 'ward-duty') throw new Error('근무표 자료 아님');
     var d = defaultSettings();
+    if (st.settings.idealWork == null) st.settings.maxWork = Math.min(+st.settings.maxWork || 4, 4); // 옛 판(최대 5일) → 4일
     for (var k in d) if (st.settings[k] == null) st.settings[k] = d[k];
     st.requests = st.requests || []; st.holidays = st.holidays || []; st.months = st.months || {};
     return st;
@@ -946,7 +992,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var S = st.settings;
     tableSheet(wb, '설정', ['항목', '값'], [28, 10], [
       ['D 하루 최소 인원', S.minD], ['D 하루 최대 인원', S.maxD], ['E 하루 최소 인원', S.minE], ['E 하루 최대 인원', S.maxE],
-      ['N 하루 최소 인원', S.minN], ['N 하루 최대 인원', S.maxN], ['최대 연속 근무일', S.maxWork], ['N 최대 연속', S.maxNRun],
+      ['N 하루 최소 인원', S.minN], ['N 하루 최대 인원', S.maxN], ['권장 연속 근무일', S.idealWork], ['최대 연속 근무일', S.maxWork], ['N 최대 연속', S.maxNRun],
       ['Night 기본 OFF 수', S.nOff]
     ].concat(SHIFT_INFO.map(function (s) { return [s.code + '  ' + s.name, s.time]; })), null);
     tableSheet(wb, '공휴일', ['날짜', '이름'], [12, 26], st.holidays.map(function (h) { return [h.date, h.name]; }), null);
@@ -1125,6 +1171,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (empty.length) msgs.push('<div class="alert warn"><b>빈 칸 있음</b>' + empty.map(function (p) { return esc(p.name) + ' ' + p.empty + '칸'; }).join(' · ') + '<br>→ \'자동 배치 (빈 칸만)\'으로 채우기</div>');
     if (rep.short.length) msgs.push('<div class="alert bad"><b>하루 인원 부족</b>' + esc(rep.short.join(' · ')) + '</div>');
     if (rule.length) msgs.push('<div class="alert bad"><b>근무 순서 주의 (N 다음 날 D·E·M · E 다음 날 D)</b>' + rule.map(function (p) { return esc(p.name) + ': ' + esc(p.rule.join(', ')); }).join('<br>') + '</div>');
+    var long = rep.persons.filter(function (p) { return p.long.length; });
+    if (long.length) msgs.push('<div class="alert warn"><b>연속 근무가 ' + (st.settings.idealWork || 3) + '일을 넘는 곳 (신청이 몰려 불가피한 경우)</b>' + long.map(function (p) { return esc(p.name) + ': ' + esc(p.long.join(', ')); }).join('<br>') + '</div>');
     if (offBad.length && !empty.length) msgs.push('<div class="alert warn"><b>OFF 수가 목표와 다름</b>' + offBad.map(function (p) { return esc(p.name) + ' ' + p.offs + '개 (목표 ' + p.target + ')'; }).join(' · ') + '</div>');
     if (!msgs.length && people.length) msgs.push('<div class="alert good"><b>점검 결과 이상 없음</b>하루 인원 · OFF 수 · 근무 순서 모두 기준 충족</div>');
     $('checkBox').innerHTML = msgs.join('');
@@ -1352,7 +1400,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   /* ----- 설정 · 공휴일 ----- */
   var SET_FIELDS = [['minD', 'D 하루 최소 인원'], ['maxD', 'D 하루 최대 인원'], ['minE', 'E 하루 최소 인원'], ['maxE', 'E 하루 최대 인원'],
-    ['minN', 'N 하루 최소 인원'], ['maxN', 'N 하루 최대 인원'], ['maxWork', '최대 연속 근무일'], ['maxNRun', 'N 최대 연속'], ['nOff', 'Night 기본 OFF 수 (새 달)'], ['trials', '자동 배치 시도 횟수']];
+    ['minN', 'N 하루 최소 인원'], ['maxN', 'N 하루 최대 인원'], ['idealWork', '권장 연속 근무일 (기본 3)'], ['maxWork', '최대 연속 근무일 (넘으면 배치 안 함)'], ['maxNRun', 'N 최대 연속'], ['nOff', 'Night 기본 OFF 수 (새 달)'], ['trials', '자동 배치 시도 횟수']];
   function renderSet() {
     $('setBox').innerHTML = '<table class="list" style="max-width:420px"><tbody>' + SET_FIELDS.map(function (f) {
       return '<tr><th style="text-align:left">' + f[1] + '</th><td><input class="n" type="number" min="0" data-s="' + f[0] + '" value="' + esc(st.settings[f[0]]) + '"></td></tr>';
