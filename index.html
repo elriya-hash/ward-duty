@@ -79,6 +79,8 @@ table.list input.n{width:60px}
 .chips{display:flex;flex-wrap:wrap;gap:6px 8px;margin-top:8px}
 .chip{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid #c9d3e0;border-radius:16px;background:#fff;cursor:pointer;white-space:nowrap}
 .chip input{margin:0}
+.rolecard{border:1px solid #d8e0ea;border-radius:8px;padding:10px;margin-bottom:8px;background:#fafcff}
+.rolecard .form{margin-bottom:4px}
 </style>
 </head>
 <body>
@@ -167,6 +169,10 @@ table.list input.n{width:60px}
   <section id="tab-set" class="hide">
     <div class="card"><h2>자동 배치 기준</h2><div id="setBox"></div>
       <p class="note">최소 인원은 꼭 채우고, 남는 인원은 최대 인원 안에서 나눔 · OFF수는 근무표 위 칸에서 달마다 바꿀 수 있음</p></div>
+    <div class="card"><h2>꼭 들어갈 사람 묶음 (차지 · 액팅)</h2>
+      <p class="note">근무마다 이 묶음에서 하루 최소 인원만큼 꼭 들어가게 배치 · 근무표 글자는 D · E 그대로<br>예: 데이 차지(D · 차지 가능한 2명 중 1명) · 이브닝 차지(E · 1명) · 이브닝 액팅(E · 조무사 중 1명)</p>
+      <div id="roleBox"></div>
+      <button id="roleAdd" style="margin-top:8px">묶음 추가</button></div>
     <div class="card"><h2>근무 코드</h2><div id="codeBox"></div></div>
     <div class="card"><h2>공휴일</h2>
       <div class="form" style="margin-bottom:10px"><label>날짜<input type="date" id="holDate"></label><label>이름<input id="holName" placeholder="예: 임시공휴일"></label><button id="holAdd">공휴일 추가</button></div>
@@ -320,6 +326,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       people: [],
       holidays: DEFAULT_HOLIDAYS.map(function (h) { return { date: h[0], name: h[1] }; }),
       requests: [],
+      roles: [],     // 꼭 들어갈 사람 묶음 (예: 데이 차지 · 이브닝 액팅) {name, shift, min, pids}
       months: {},
       seq: 1
     };
@@ -539,6 +546,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       q.workTarget = nD - q.target - leave;
     });
 
+    // 꼭 들어갈 사람 묶음 (10-16 사용자: 데이 차지 · 이브닝 차지 · 이브닝 액팅(조무사) 꼭 섞기)
+    var ROLES = (st.roles || []).map(function (r) {
+      var idx = []; (r.pids || []).forEach(function (id) { P.forEach(function (q, i) { if (q.p.id === id) idx.push(i); }); });
+      return { name: r.name, s: code(r.shift), min: Math.max(1, +r.min || 1), idx: idx };
+    }).filter(function (r) { return r.idx.length && r.s >= C_D; });
+    function roleCount(G, d, r) { var n = 0; r.idx.forEach(function (i) { if (G[i][d] === r.s) n++; }); return n; }
+    function canRemove(G, d, pi, s) {
+      for (var k = 0; k < ROLES.length; k++) { var r = ROLES[k]; if (r.s === s && r.idx.indexOf(pi) >= 0 && roleCount(G, d, r) - 1 < r.min) return false; }
+      return true;
+    }
+
     function at(q, g, d) { return d >= 0 ? g[d] : (q.tail.length + d >= 0 ? q.tail[q.tail.length + d] : C_EMPTY); }
     function runBack(q, g, d, pred) { var n = 0; for (var k = d - 1; k >= -7; k--) { var c = at(q, g, k); if (pred(c)) n++; else break; } return n; }
     function runFwd(g, d, pred) { var n = 0; for (var k = d + 1; k < nD; k++) { if (pred(g[k])) n++; else break; } return n; }
@@ -595,6 +613,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (c < minS[s]) pen += 1000 * (minS[s] - c);
         if (c > maxS[s]) pen += 80 * (c - maxS[s]);
       }
+      for (d = 0; d < nD; d++) ROLES.forEach(function (r) { var n = roleCount(G, d, r); if (n < r.min) pen += 1000 * (r.min - n); });
       W.forEach(function (q) {
         var g = G[P.indexOf(q)], offs = 0, i, dd = 0, ee = 0, sw = 0, wkOff = 0;
         for (i = 0; i < nD; i++) {
@@ -647,6 +666,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           if (q.fixed[d]) return;
           var R = q.workTarget - worked[wi] - q.fixedWorkFrom[d], F = q.freeFrom[d];
           free.push({ q: q, wi: wi, pi: pi, R: R, F: F, done: false });
+        });
+        ROLES.forEach(function (r) {
+          while (roleCount(G, d, r) < r.min) {
+            var best = null, bs = -1e9;
+            free.forEach(function (f) {
+              if (f.done || r.idx.indexOf(f.pi) < 0 || cnt[d][r.s] >= maxS[r.s]) return;
+              var g = G[f.pi];
+              if (!eligible(f.q, g, d, r.s)) return;
+              var sc = (f.R > 0 ? 1 : -1) + f.R / Math.max(1, f.F) + bonus(f.q, g, d, r.s, f.R) + (rand() - 0.5) * 0.25;
+              if (sc > bs) { bs = sc; best = f; }
+            });
+            if (!best) break;
+            G[best.pi][d] = r.s; cnt[d][r.s]++; best.done = true;
+          }
         });
         [C_N, C_D, C_E].forEach(function (s) {
           while (cnt[d][s] < minS[s]) {
@@ -711,6 +744,25 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             if (offsOf(G[bpi]) < best.target) giveOff(G, cnt, best, bpi, d);
           }
         }
+        // ①-2 꼭 들어갈 사람 묶음 채우기 (OFF 인 사람을 넣거나 · 다른 근무에서 옮김)
+        for (d = 0; d < nD; d++) ROLES.forEach(function (r) {
+          var guard = 5;
+          while (roleCount(G, d, r) < r.min && guard-- > 0) {
+            var best = null, bs = -1e9;
+            r.idx.forEach(function (pi) {
+              var q = P[pi], g = G[pi], cur = g[d];
+              if (q.fixed[d] || cur === r.s || !eligible(q, g, d, r.s) || cnt[d][r.s] >= maxS[r.s] + 1) return;
+              if (isWork(cur) && (cnt[d][cur] <= minS[cur] || !canRemove(G, d, pi, cur))) return;
+              if (!(cur === C_OFF || isWork(cur))) return;
+              var sc = (cur === C_OFF ? (offsOf(g) - q.target) : 1) + bonus(q, g, d, r.s, 0) + rand() * 0.1;
+              if (sc > bs) { bs = sc; best = pi; }
+            });
+            if (best === null) break;
+            var wasOff = G[best][d] === C_OFF;
+            setCell(G, cnt, best, d, r.s); changed = true;
+            if (wasOff && offsOf(G[best]) < P[best].target) giveOff(G, cnt, P[best], best, d);
+          }
+        });
         // ② 사람별 OFF 수 맞추기
         W.forEach(function (q) {
           var pi = P.indexOf(q), g = G[pi], diff = offsOf(g) - q.target, guard = 40;
@@ -735,7 +787,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         for (var x = region.s; x <= region.e; x++) {
           if (q.fixed[x] || !isWork(g[x])) continue;
           var sx = g[x];
-          if (cnt[x][sx] <= minS[sx]) continue;
+          if (cnt[x][sx] <= minS[sx] || !canRemove(G, x, pi, sx)) continue;
           var left = runBack(q, g, x, isWork), right = runFwd(g, x, isWork), worst = Math.max(left, right);
           g[x] = C_OFF;
           var wk = 0; for (var z = 0; z < nD; z++) if (rest[z] && isOffish(g[z])) wk++;
@@ -778,7 +830,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       for (var d = 0; d < nD; d++) {
         if (d === avoid || q.fixed[d] || !isWork(g[d])) continue;
         var s = g[d];
-        if (cnt[d][s] <= minS[s]) continue;
+        if (cnt[d][s] <= minS[s] || !canRemove(G, d, pi, s)) continue;
         var sc = (cnt[d][s] - minS[s]) + runBack(q, g, d, isWork) * 0.3 + runFwd(g, d, isWork) * 0.3;
         if (q.weekendMin > 0 && rest[d]) sc += 0.5;
         if (sc > bs) { bs = sc; best = d; }
@@ -846,6 +898,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (c.E < S.minE) short.push((d + 1) + '일 E ' + c.E + '명');
       if (c.N < S.minN) short.push((d + 1) + '일 N ' + c.N + '명');
     }
+    // 꼭 들어갈 사람 묶음이 빠진 날
+    var roleShort = [];
+    (st.roles || []).forEach(function (r) {
+      var ids = (r.pids || []).filter(function (id) { return mon.rows[id] && people.some(function (p) { return p.id === id; }); });
+      if (!ids.length) return;
+      var sc = code(r.shift), min = Math.max(1, +r.min || 1), miss = [];
+      for (var d = 0; d < nD; d++) { var n = 0; ids.forEach(function (id) { if (code(mon.rows[id].cells[d]) === sc) n++; }); if (n < min) miss.push(d + 1); }
+      if (miss.length) roleShort.push({ name: r.name || r.shift, days: miss });
+    });
     people.forEach(function (p) {
       var row = mon.rows[p.id], offs = 0, leave = 0, rule = [];
       for (var d = 0; d < nD; d++) {
@@ -864,7 +925,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       persons.push({ id: p.id, name: p.name, offs: offs, target: tgt, leave: leave, rule: rule, long: long, wkOff: wkOff, wkMin: wkMin, empty: row.cells.slice(rg.s - 1, rg.e).filter(function (v) { return !v; }).length });
     });
-    return { day: day, short: short, persons: persons };
+    return { day: day, short: short, persons: persons, roleShort: roleShort };
   }
 
   /* ---------- 저장 (엑셀 '_data' 시트) ---------- */
@@ -875,7 +936,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var d = defaultSettings();
     if (st.settings.idealWork == null) st.settings.maxWork = Math.min(+st.settings.maxWork || 4, 4); // 옛 판(최대 5일) → 4일
     for (var k in d) if (st.settings[k] == null) st.settings[k] = d[k];
-    st.requests = st.requests || []; st.holidays = st.holidays || []; st.months = st.months || {};
+    st.requests = st.requests || []; st.roles = st.roles || []; st.holidays = st.holidays || []; st.months = st.months || {};
     return st;
   }
 
@@ -1240,6 +1301,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var msgs = [], offBad = rep.persons.filter(function (p) { return p.offs !== p.target; }),
       rule = rep.persons.filter(function (p) { return p.rule.length; }), empty = rep.persons.filter(function (p) { return p.empty; });
     if (empty.length) msgs.push('<div class="alert warn"><b>빈 칸 있음</b>' + empty.map(function (p) { return esc(p.name) + ' ' + p.empty + '칸'; }).join(' · ') + '<br>→ \'자동 배치 (빈 칸만)\'으로 채우기</div>');
+    if (rep.roleShort && rep.roleShort.length) msgs.push('<div class="alert bad"><b>차지 · 액팅 빠진 날</b>' + rep.roleShort.map(function (r) { return esc(r.name) + ': ' + r.days.map(function (d) { return d + '일'; }).join(', '); }).join('<br>') + '<br>→ 신청이 겹친 날이면 신청 조정 · 아니면 ‘전체 다시 배치’</div>');
     if (rep.short.length) msgs.push('<div class="alert bad"><b>하루 인원 부족</b>' + esc(rep.short.join(' · ')) + '</div>');
     if (rule.length) msgs.push('<div class="alert bad"><b>근무 순서 주의 (N 다음 날 D·E·M · E 다음 날 D)</b>' + rule.map(function (p) { return esc(p.name) + ': ' + esc(p.rule.join(', ')); }).join('<br>') + '</div>');
     var wkLow = rep.persons.filter(function (p) { return p.wkMin > 0 && p.wkOff < p.wkMin; });
@@ -1497,7 +1559,35 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ----- 설정 · 공휴일 ----- */
   var SET_FIELDS = [['minD', 'D 하루 최소 인원'], ['maxD', 'D 하루 최대 인원'], ['minE', 'E 하루 최소 인원'], ['maxE', 'E 하루 최대 인원'],
     ['minN', 'N 하루 최소 인원'], ['maxN', 'N 하루 최대 인원'], ['idealWork', '권장 연속 근무일 (기본 3)'], ['maxWork', '최대 연속 근무일 (넘으면 배치 안 함)'], ['weekendMinDE', 'Day · Eve 주말 OFF 최소 (토·일·공휴일)'], ['maxNRun', 'N 최대 연속'], ['nOff', 'Night 기본 OFF 수 (새 달)'], ['trials', '자동 배치 시도 횟수']];
+  function renderRoles() {
+    var ppl = st.people.filter(function (p) { return !p.quit; });
+    $('roleBox').innerHTML = (st.roles || []).map(function (r, i) {
+      return '<div class="rolecard" data-r="' + i + '"><div class="form">' +
+        '<label>이름<input data-f="name" value="' + esc(r.name || '') + '" placeholder="예: 데이 차지" size="12"></label>' +
+        '<label>근무<select data-f="shift">' + ['D', 'E', 'N'].map(function (c) { return '<option' + (r.shift === c ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></label>' +
+        '<label>하루 최소<input data-f="min" type="number" min="1" max="3" class="n" value="' + esc(r.min || 1) + '"> 명</label>' +
+        '<button class="del" data-del="' + i + '">삭제</button></div>' +
+        '<div class="chips">' + ppl.map(function (p) { return '<label class="chip"><input type="checkbox" data-p="' + p.id + '"' + ((r.pids || []).indexOf(p.id) >= 0 ? ' checked' : '') + '> ' + esc(p.name) + '</label>'; }).join('') + '</div></div>';
+    }).join('') || '<div class="note">묶음 없음</div>';
+  }
+  function roleEvents() {
+    $('roleAdd').onclick = function () { st.roles = st.roles || []; st.roles.push({ name: '', shift: 'D', min: 1, pids: [] }); renderRoles(); save(); };
+    $('roleBox').addEventListener('change', function (e) {
+      var card = e.target.closest('.rolecard'); if (!card) return;
+      var r = st.roles[+card.dataset.r], t = e.target;
+      if (t.dataset.f === 'min') r.min = Math.max(1, parseInt(t.value, 10) || 1);
+      else if (t.dataset.f) r[t.dataset.f] = t.value.trim();
+      if (t.dataset.p) { r.pids = r.pids || []; var k = r.pids.indexOf(t.dataset.p); if (t.checked && k < 0) r.pids.push(t.dataset.p); if (!t.checked && k >= 0) r.pids.splice(k, 1); }
+      save();
+    });
+    $('roleBox').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-del]'); if (!b) return;
+      if (!confirm('이 묶음을 지울까요?')) return;
+      st.roles.splice(+b.dataset.del, 1); renderRoles(); save();
+    });
+  }
   function renderSet() {
+    renderRoles();
     $('setBox').innerHTML = '<table class="list" style="max-width:420px"><tbody>' + SET_FIELDS.map(function (f) {
       return '<tr><th style="text-align:left">' + f[1] + '</th><td><input class="n" type="number" min="0" data-s="' + f[0] + '" value="' + esc(st.settings[f[0]]) + '"></td></tr>';
     }).join('') + '</tbody></table>';
@@ -1535,7 +1625,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   document.addEventListener('DOMContentLoaded', function () {
     st = load();
     $('ver').textContent = '판 ' + D.VERSION;
-    initHeader(); gridEvents(); gridButtons(); reqEvents(); peopleEvents(); setEvents();
+    initHeader(); gridEvents(); gridButtons(); reqEvents(); peopleEvents(); setEvents(); roleEvents();
     render();
   });
 })();
