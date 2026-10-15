@@ -899,10 +899,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       hc2.border = BOX; hc2.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     }
 
-    // 사람 줄 (묶음 사이 빈 줄)
-    var rowNo = 5, firstRow = 5, lastGroup = null, personRows = [], blankRows = [];
+    // 사람 줄 (빈 줄 없이 같은 높이 · 묶음 사이는 굵은 선)
+    var rowNo = 5, lastGroup = null, personRows = [], groupTops = [];
     people.forEach(function (p) {
-      if (lastGroup !== null && p.group !== lastGroup) { blankRows.push(rowNo); styleRow(ws, rowNo, null); rowNo++; }
+      if (lastGroup !== null && p.group !== lastGroup) groupTops.push(rowNo);
       lastGroup = p.group;
       var row = mon.rows[p.id];
       personRows.push(rowNo);
@@ -940,28 +940,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     var lastP = rowNo - 1;
 
-    // 하루 인원 점검 줄
-    rowNo++;
-    var cntRows = [];
-    [['D', S.minD], ['E', S.minE], ['N', S.minN], ['M', 0]].forEach(function (it) {
-      var r = ws.getRow(rowNo);
-      r.getCell(2).value = it[0] + ' 인원';
-      r.getCell(2).font = { name: FONT, size: 9, bold: true, color: { argb: COLOR.note } };
-      r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
-      for (var d = 1; d <= nD; d++) {
-        var col = colLetter(C0 + d - 1), cell = r.getCell(C0 + d - 1);
-        cell.value = { formula: 'COUNTIF(' + col + '$' + firstRow + ':' + col + '$' + lastP + ',"' + it[0] + '")' };
-        cell.font = { name: FONT, size: 9, color: { argb: COLOR.note } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        cell.border = { top: { style: 'hair', color: { argb: 'FF999999' } }, bottom: { style: 'hair', color: { argb: 'FF999999' } } };
-      }
-      if (it[1] > 0) ws.addConditionalFormatting({
-        ref: colLetter(C0) + rowNo + ':' + colLetter(CL) + rowNo,
-        rules: [{ type: 'cellIs', operator: 'lessThan', formulae: [String(it[1])], style: { font: { color: { argb: 'FFC00000' }, bold: true }, fill: fill('FFFFC7CE') } }]
-      });
-      cntRows.push(rowNo); rowNo++;
-    });
-    var lastRow = rowNo - 1;
+    // 하루 인원 점검 줄은 인쇄에서 뺌 (웹 화면 점검 결과로 확인)
+    var lastRow = lastP;
     // OFF 목표와 다르면 off 칸 빨간 글자
     personRows.forEach(function (rn) {
       var p = people[personRows.indexOf(rn)], tgt = effTarget(st, y, m, p);
@@ -971,17 +951,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
     });
 
-    // 행 높이: A4 가로 인쇄 영역(25.7 x 18 cm)을 가득 채우도록
+    // 묶음 사이 굵은 선
+    groupTops.forEach(function (rn) {
+      for (var c = 1; c <= lastCol; c++) { var cl = ws.getCell(rn, c), b = Object.assign({}, cl.border); b.top = { style: 'medium', color: { argb: 'FF000000' } }; cl.border = b; }
+    });
+    // 행 높이: A4 가로 인쇄 영역(25.7 x 18 cm)에 가로 · 세로가 함께 꽉 차도록 · 사람 줄은 모두 같은 높이(화면 점 단위로 맞춰 줄 간격 흔들림 없앰)
     var widthPt = 0;
     for (c = 1; c <= lastCol; c++) widthPt += (Math.floor(ws.getColumn(c).width * 7 + 5)) * 0.75;
-    var totalH = widthPt * 18 / 25.7 * 1.07; // 1.07 = 엑셀 PDF 로 그려 본 실측 보정 (아래 여백 없애기)
-    var fixedH = 44 + 6 + 20 + 20 + (blankRows.length * 12) + 8 + cntRows.length * 13;
-    var ph = Math.max(16, Math.min(40, (totalH - fixedH) / Math.max(1, personRows.length)));
+    var totalH = widthPt * 18 / 25.7;
+    var fixedH = 44 + 6 + 20 + 20;
+    var ph = Math.max(16, Math.min(42, (totalH - fixedH) / Math.max(1, personRows.length)));
+    ph = Math.floor(ph / 0.75) * 0.75;
     ws.getRow(1).height = 44; ws.getRow(3).height = 20; ws.getRow(4).height = 20;
     personRows.forEach(function (rn) { ws.getRow(rn).height = ph; });
-    blankRows.forEach(function (rn) { ws.getRow(rn).height = 12; });
-    ws.getRow(lastP + 1).height = 8;
-    cntRows.forEach(function (rn) { ws.getRow(rn).height = 13; });
 
     ws.pageSetup = {
       paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1,
