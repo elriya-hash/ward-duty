@@ -520,7 +520,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     function bonus(q, g, d, s, R) {
       var b = 0, prev = at(q, g, d - 1), prev2 = at(q, g, d - 2);
-      if (q.type === 'DED') b += s === C_D ? 0.18 : -0.06;
+      if (q.type === 'DED') { // D 많이: E 약 30% (D·E 는 그날 필요한 쪽으로 · 10-16 E 고정 인원 연속 근무가 늘어 반반 맞추기 뺌)
+        var nd0 = 0, ne0 = 0; for (var j = 0; j < d; j++) { if (g[j] === C_D) nd0++; else if (g[j] === C_E) ne0++; }
+        var eShare = (ne0 + 1) / (nd0 + ne0 + 2), want = 0.3;
+        if (s === C_E) b += eShare < want ? 0.2 : -0.1; else b += eShare < want ? -0.1 : 0.15;
+      }
       if ((q.type === 'DE' || q.type === 'DED') && prev === s) b += 0.08;
       if (s === C_N) {
         var nb = runBack(q, g, d, isN);
@@ -580,7 +584,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           if (orun === 4) pen += 12;
         }
         if (q.type === 'DE' || q.type === 'DED') pen += 2 * sw;
-        if (q.type === 'DED' && dd - ee < 2) pen += 15 * (2 - (dd - ee));
+        if (q.type === 'DED') { // D 많이: E 는 근무의 약 30% (최소 20% · D 가 항상 더 많게)
+          var eT = Math.round((dd + ee) * 0.3), eMin = Math.ceil((dd + ee) * 0.2);
+          if (ee < eMin) pen += 60 * (eMin - ee);
+          pen += 8 * Math.abs(ee - eT);
+          if (dd - ee < 2) pen += 40 * (2 - (dd - ee));
+        }
         if (q.weekendMin > 0 && wkOff < q.weekendMin) pen += 160 * (q.weekendMin - wkOff);
         if (wkOff === 0) pen += 20;
       });
