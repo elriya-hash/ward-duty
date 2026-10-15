@@ -76,6 +76,9 @@ table.list input.n{width:60px}
 .hide{display:none!important}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1d2733;color:#fff;padding:10px 18px;border-radius:8px;z-index:99;max-width:90vw}
 @media (max-width:700px){header h1{font-size:16px}main{padding:10px}}
+.chips{display:flex;flex-wrap:wrap;gap:6px 8px;margin-top:8px}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid #c9d3e0;border-radius:16px;background:#fff;cursor:pointer;white-space:nowrap}
+.chip input{margin:0}
 </style>
 </head>
 <body>
@@ -108,6 +111,7 @@ table.list input.n{width:60px}
         <label>OFF수 <input type="number" id="offCount" min="0" max="31"> 개</label>
         <span class="note" id="restInfo"></span>
         <label>Night OFF <input type="number" id="nOff" min="0" max="31"> 개</label>
+        <label title="OFF 수가 적은 달에 1인당 연차를 더 붙여 쉬는 날 늘리기 · 자동 배치가 평일 · 쉬는 날 옆에 배치">연차 추가 (1인당) <input type="number" id="extraLeave" min="0" max="10"> 개</label>
       </div>
       <div class="note" id="holInfo" style="margin-bottom:10px"></div>
       <div class="bar">
@@ -139,6 +143,10 @@ table.list input.n{width:60px}
         <button id="rqAdd" class="pri">신청 추가</button>
       </div>
       <p class="note">신청을 추가하면 근무표에 노란 칸으로 바로 들어감 · 신청이 다 모이지 않아도 먼저 자동 배치 가능 · 나중에 신청이 더 오면 추가 후 '전체 다시 배치'<br>연차를 여러 날 한 번에 넣으면 번호가 차례로 붙음 (예: 9부터 3일 → 연9 · 연10 · 연11)</p>
+    </div>
+    <div class="card"><h2>이번 달 연차 아끼기</h2>
+      <p class="note">체크한 사람은 연차 자동 처리 안 함 (신청 OFF 초과분 · 연차 추가 · 연속 근무 제한으로 생긴 쉬는 날 모두 OFF 로 둠)<br>신청 OFF 가 이달 OFF 수보다 많으면 점검 결과에 '신청 조정 필요'로 표시</p>
+      <div id="saveBox" class="chips"></div>
     </div>
     <div class="card"><h2>신청 목록 <span id="reqCount" class="note"></span></h2><div id="reqList"></div></div>
   </section>
@@ -189,6 +197,7 @@ table.list input.n{width:60px}
         <li>연속 근무는 3일 기본 (신청이 몰려 불가피할 때만 4일 · 5일 이상 없음) · N 연속 최대 3일 · N 끝나면 OFF 2일 쪽으로</li>
         <li>OFF 수: Day · Evening 근무자 = OFF수 / Night = Night OFF (사람마다 다르면 근무표 'OFF 목표' 칸)</li>
         <li>연차 칸은 OFF 수에 들어가지 않음 (따로 셈)</li>
+        <li>OFF 가 적은 달 연차 당겨 쓰기 ① 신청 OFF 가 그달 OFF 수보다 많으면 넘는 만큼 자동으로 연차 처리 (평일 · 늦은 날짜부터) ② 다 같이 더 쉬게 하려면 근무표 위 '연차 추가 (1인당)'에 개수 입력 → 전체 다시 배치 (평일 · 쉬는 날 옆에 연차 배치)</li>
         <li>지난달 마지막 근무와 이어지게 (예: 지난달 말 N 뒤 1일 D 없음)</li>
       </ul>
     </div>
@@ -481,6 +490,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     minS[C_D] = +S.minD; maxS[C_D] = +S.maxD; minS[C_E] = +S.minE; maxS[C_E] = +S.maxE; minS[C_N] = +S.minN; maxS[C_N] = +S.maxN;
     var MAXW = +S.maxWork || 4, MAXN = +S.maxNRun || 3, IDEAL = Math.min(+S.idealWork || 3, MAXW);
 
+    var autoLeave = [], shortLeave = [], extra = Math.max(0, parseInt(mon.extraLeave, 10) || 0);
     var P = people.map(function (p) {
       var row = mon.rows[p.id], base = [], fixed = [], tail = [], out = [], rg = dayRange(p, y, m);
       for (var d = 0; d < nD; d++) {
@@ -493,11 +503,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         fixed.push(fx); base.push(fx ? c : C_EMPTY);
       }
       if (pmon && pmon.rows[p.id]) for (var k = Math.max(0, pnD - 7); k < pnD; k++) tail.push(code(pmon.rows[p.id].cells[k]));
-      var t = TYPE_MAP[p.type] || TYPE_MAP.DE;
+      var t = TYPE_MAP[p.type] || TYPE_MAP.DE, tg = effTarget(st, y, m, p);
+      // 신청 OFF 가 그 달 OFF 수보다 많으면 넘는 만큼 연차로 (평일 · 늦은 날짜부터 · 10-16 사용자 'OFF 가 적은 달은 연차를 당겨 씀')
+      var save = !!row.saveLeave; // 이달 연차 아끼기 (10-16 사용자 '연차를 아껴서 안 쓰고 싶은 경우') → 자동 연차 처리 안 함
+      if (p.type !== 'M' && !save) {
+        var fo = []; for (var d2 = 0; d2 < nD; d2++) if (fixed[d2] && base[d2] === C_OFF && !out[d2]) fo.push(d2);
+        var over = fo.length - tg;
+        if (over > 0) {
+          fo.sort(function (a, b) { return (rest[a] ? 1 : 0) - (rest[b] ? 1 : 0) || b - a; });
+          fo.slice(0, over).forEach(function (d3) { base[d3] = C_LEAVE; row.cells[d3] = '연'; autoLeave.push({ pid: p.id, day: d3 + 1, why: '신청 OFF 초과' }); });
+        }
+      }
       return {
         p: p, row: row, base: base, fixed: fixed, tail: tail, type: p.type, out: out,
         allowed: t.shifts.map(function (s) { return code(s); }),
-        target: effTarget(st, y, m, p),
+        target: tg + (p.type !== 'M' && !save ? extra : 0), extra: p.type !== 'M' && !save ? extra : 0, save: save,
         weekendMin: rg.n === nD ? weekendMinOf(st, p) : Math.floor(weekendMinOf(st, p) * rg.n / nD)
       };
     });
@@ -774,10 +794,37 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (sc < bestScore) { bestScore = sc; bestG = G; }
     }
 
+    // 연차 추가(1인당): 배치된 OFF 중 평일 · 쉬는 날과 붙은 칸부터 연차로 (OFF 수는 그달 목표 그대로)
+    P.forEach(function (q, i) {
+      if (!q.extra) return;
+      var g = bestG[i], cand = [];
+      for (var d = 0; d < nD; d++) if (!q.fixed[d] && g[d] === C_OFF) {
+        var nb = (d > 0 && (g[d - 1] === C_OFF || g[d - 1] === C_LEAVE || rest[d - 1]) ? 1 : 0) + (d + 1 < nD && (g[d + 1] === C_OFF || g[d + 1] === C_LEAVE || rest[d + 1]) ? 1 : 0);
+        cand.push({ d: d, sc: (rest[d] ? -10 : 0) + nb });
+      }
+      cand.sort(function (a, b) { return b.sc - a.sc || a.d - b.d; });
+      // 하루 인원 때문에 더 쉴 수 없으면(예: N 4명이 하루 2명) OFF 를 줄이지 않고 넘는 만큼만 연차로
+      var room = Math.min(q.extra, offsOf(g) - (q.target - q.extra));
+      if (room < q.extra) shortLeave.push({ pid: q.p.id, want: q.extra, got: Math.max(0, room) });
+      cand.slice(0, Math.max(0, room)).forEach(function (c) { g[c.d] = C_LEAVE; autoLeave.push({ pid: q.p.id, day: c.d + 1, why: '연차 추가' }); });
+    });
+    // 배치 뒤에도 OFF 가 그달 OFF 수보다 많으면 (신청이 몰려 연속 근무 제한상 불가피) 넘는 OFF 를 연차로 · 평일부터
+    P.forEach(function (q, i) {
+      if (q.type === 'M' || q.save) return;
+      var g = bestG[i], over = -(q.target - q.extra), cand = [];
+      for (var d = 0; d < nD; d++) if (g[d] === C_OFF) { over++; if (!q.fixed[d]) cand.push(d); }
+      if (over <= 0) return;
+      cand.sort(function (a, b) { return (rest[a] ? 1 : 0) - (rest[b] ? 1 : 0) || b - a; });
+      cand.slice(0, over).forEach(function (d) { g[d] = C_LEAVE; autoLeave.push({ pid: q.p.id, day: d + 1, why: '배치상 초과' }); });
+    });
+    mon.autoLeave = autoLeave; mon.shortLeave = shortLeave;
+
     // 결과 쓰기 (고정 칸은 그대로)
     P.forEach(function (q, i) {
       for (var d = 0; d < nD; d++) {
-        if (q.out[d] || q.row.fixed[d] || code(q.row.cells[d]) === C_LEAVE || (opt.onlyBlank && q.row.cells[d] !== '')) continue;
+        var cv = code(q.row.cells[d]);
+        if (q.out[d] || (q.row.fixed[d] && cv !== C_EMPTY) || cv === C_LEAVE || (opt.onlyBlank && cv !== C_EMPTY)) continue;
+        if (cv === C_EMPTY) q.row.fixed[d] = false;
         q.row.cells[d] = CODE_STR[bestG[i][d]];
       }
     });
@@ -1143,7 +1190,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ----- 근무표 ----- */
   function renderGrid() {
     var y = cur.y, m = cur.m, M = mon(), nD = D.daysIn(y, m), people = D.activePeople(st, y, m), S = st.settings;
-    $('offCount').value = M.offCount; $('nOff').value = M.nOff;
+    $('offCount').value = M.offCount; $('nOff').value = M.nOff; $('extraLeave').value = M.extraLeave || 0;
     $('restInfo').textContent = '(이번 달 토·일·공휴일 ' + D.restCount(st, y, m) + '일)';
     var hol = [];
     for (var d = 1; d <= nD; d++) { var hn = D.holidayName(st, y, m, d); if (hn) hol.push(d + '일 ' + hn); }
@@ -1200,6 +1247,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var long = rep.persons.filter(function (p) { return p.long.length; });
     if (long.length) msgs.push('<div class="alert warn"><b>연속 근무가 ' + (st.settings.idealWork || 3) + '일을 넘는 곳 (신청이 몰려 불가피한 경우)</b>' + long.map(function (p) { return esc(p.name) + ': ' + esc(p.long.join(', ')); }).join('<br>') + '</div>');
     if (offBad.length && !empty.length) msgs.push('<div class="alert warn"><b>OFF 수가 목표와 다름</b>' + offBad.map(function (p) { return esc(p.name) + ' ' + p.offs + '개 (목표 ' + p.target + ')'; }).join(' · ') + '</div>');
+    var al = (M.autoLeave || []).filter(function (a) { var r = M.rows[a.pid]; return r && String(r.cells[a.day - 1]).charAt(0) === '연'; });
+    if (al.length) {
+      var byP = {}; al.forEach(function (a) { var nm = (st.people.filter(function (x) { return x.id === a.pid; })[0] || {}).name || '?'; (byP[nm] = byP[nm] || []).push(a.day + '일' + (a.why === '신청 OFF 초과' ? '(신청 초과)' : a.why === '배치상 초과' ? '(연속 근무 제한)' : '')); });
+      msgs.push('<div class="alert"><b>연차로 처리한 칸 ' + al.length + '개</b>' + Object.keys(byP).map(function (n) { return esc(n) + ': ' + esc(byP[n].join(', ')); }).join('<br>') + '<br>이달 OFF 수를 넘는 쉬는 날(신청 초과 · 신청이 몰려 연속 근무 제한으로 생긴 날) · '연차 추가' 개수만큼 연차 처리 · 바꾸려면 칸을 눌러 직접 수정</div>');
+    }
+    var sv = people.filter(function (p) {
+      var r = M.rows[p.id]; if (!r || !r.saveLeave) return false;
+      var n = 0; for (var d = 0; d < nD; d++) if (r.fixed[d] && r.cells[d] === '/') n++;
+      return n > D.effTarget(st, y, m, p);
+    });
+    if (sv.length) msgs.push('<div class="alert warn"><b>신청 조정 필요 (연차 아끼기인데 신청 OFF 가 이달 OFF 수보다 많음)</b>' + sv.map(function (p) { return esc(p.name) + ' (OFF 목표 ' + D.effTarget(st, y, m, p) + ')'; }).join(' · ') + '<br>→ 신청을 줄이거나 연차 아끼기를 끄기</div>');
+    var sl = (M.extraLeave > 0 && M.shortLeave) || [];
+    if (sl.length) msgs.push('<div class="alert warn"><b>하루 인원 때문에 연차 추가를 다 못 넣은 사람</b>' + sl.map(function (a) { var nm = (st.people.filter(function (x) { return x.id === a.pid; })[0] || {}).name || '?'; return esc(nm) + ' ' + a.got + '개 (요청 ' + a.want + ')'; }).join(' · ') + '</div>');
     if (!msgs.length && people.length) msgs.push('<div class="alert good"><b>점검 결과 이상 없음</b>하루 인원 · OFF 수 · 근무 순서 모두 기준 충족</div>');
     $('checkBox').innerHTML = msgs.join('');
   }
@@ -1286,6 +1346,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function gridButtons() {
     $('offCount').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().offCount = v; render(); } };
     $('nOff').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().nOff = v; render(); } };
+    $('extraLeave').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().extraLeave = v; render(); toast('연차 추가 ' + v + '개 · '전체 다시 배치'로 반영'); } };
     $('btnApply').onclick = function () {
       var r = D.applyRequests(st, cur.y, cur.m);
       render();
@@ -1334,6 +1395,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           '</td><td>' + esc(r.memo || '') + '</td><td><button class="del" data-i="' + x.i + '">삭제</button></td></tr>';
       }).join('') + '</tbody></table>' : '<div class="note">이번 달 신청 없음</div>';
     $('reqCount').textContent = list.length ? '(' + list.length + '건)' : '';
+    var M = mon();
+    $('saveBox').innerHTML = people.filter(function (p) { return p.type !== 'M'; }).map(function (p) {
+      return '<label class="chip"><input type="checkbox" data-pid="' + p.id + '"' + (M.rows[p.id] && M.rows[p.id].saveLeave ? ' checked' : '') + '> ' + esc(p.name) + '</label>';
+    }).join('');
+    $('saveBox').onchange = function (e) {
+      var pid = e.target.dataset.pid; if (!pid) return;
+      mon().rows[pid].saveLeave = e.target.checked; save();
+      toast((e.target.checked ? '연차 아끼기 켬' : '연차 아끼기 끔') + ' · '전체 다시 배치'로 반영');
+    };
   }
   function parseDays(s, nD) {
     var out = [];
