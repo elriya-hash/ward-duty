@@ -1250,7 +1250,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var al = (M.autoLeave || []).filter(function (a) { var r = M.rows[a.pid]; return r && String(r.cells[a.day - 1]).charAt(0) === '연'; });
     if (al.length) {
       var byP = {}; al.forEach(function (a) { var nm = (st.people.filter(function (x) { return x.id === a.pid; })[0] || {}).name || '?'; (byP[nm] = byP[nm] || []).push(a.day + '일' + (a.why === '신청 OFF 초과' ? '(신청 초과)' : a.why === '배치상 초과' ? '(연속 근무 제한)' : '')); });
-      msgs.push('<div class="alert"><b>연차로 처리한 칸 ' + al.length + '개</b>' + Object.keys(byP).map(function (n) { return esc(n) + ': ' + esc(byP[n].join(', ')); }).join('<br>') + '<br>이달 OFF 수를 넘는 쉬는 날(신청 초과 · 신청이 몰려 연속 근무 제한으로 생긴 날) · '연차 추가' 개수만큼 연차 처리 · 바꾸려면 칸을 눌러 직접 수정</div>');
+      msgs.push('<div class="alert"><b>연차로 처리한 칸 ' + al.length + '개</b>' + Object.keys(byP).map(function (n) { return esc(n) + ': ' + esc(byP[n].join(', ')); }).join('<br>') + '<br>이달 OFF 수를 넘는 쉬는 날(신청 초과 · 신청이 몰려 연속 근무 제한으로 생긴 날) · ‘연차 추가’ 개수만큼 연차 처리 · 바꾸려면 칸을 눌러 직접 수정</div>');
     }
     var sv = people.filter(function (p) {
       var r = M.rows[p.id]; if (!r || !r.saveLeave) return false;
@@ -1346,7 +1346,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function gridButtons() {
     $('offCount').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().offCount = v; render(); } };
     $('nOff').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().nOff = v; render(); } };
-    $('extraLeave').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().extraLeave = v; render(); toast('연차 추가 ' + v + '개 · '전체 다시 배치'로 반영'); } };
+    $('extraLeave').onchange = function () { var v = parseInt(this.value, 10); if (v >= 0) { mon().extraLeave = v; render(); toast('연차 추가 ' + v + '개 · ‘전체 다시 배치’로 반영'); } };
     $('btnApply').onclick = function () {
       var r = D.applyRequests(st, cur.y, cur.m);
       render();
@@ -1402,7 +1402,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $('saveBox').onchange = function (e) {
       var pid = e.target.dataset.pid; if (!pid) return;
       mon().rows[pid].saveLeave = e.target.checked; save();
-      toast((e.target.checked ? '연차 아끼기 켬' : '연차 아끼기 끔') + ' · '전체 다시 배치'로 반영');
+      toast((e.target.checked ? '연차 아끼기 켬' : '연차 아끼기 끔') + ' · ‘전체 다시 배치’로 반영');
     };
   }
   function parseDays(s, nD) {
