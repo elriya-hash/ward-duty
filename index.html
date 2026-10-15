@@ -50,6 +50,8 @@ table.grid td.c{cursor:pointer;font-weight:bold;font-size:14px}
 table.grid td.c.fx{background:var(--yellow)}
 table.grid td.c.yeon{font-size:11px}
 table.grid td.out{background:#d9d9d9}
+table.grid .pv{background:#eef0f3;color:#7a8594;font-size:11px;min-width:26px}
+table.grid .pvl{border-right:3px solid #7a8594}
 table.grid td.c.selc{outline:3px solid var(--sel);outline-offset:-3px}
 table.grid td.sum{font-size:13px;min-width:38px}
 table.grid td.sum.bad{color:var(--red);font-weight:bold}
@@ -1306,6 +1308,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   /* ----- 근무표 ----- */
+  var PREV_DAYS = 5;
   function renderGrid() {
     var y = cur.y, m = cur.m, M = mon(), nD = D.daysIn(y, m), people = D.activePeople(st, y, m), S = st.settings;
     $('offCount').value = M.offCount; $('nOff').value = M.nOff; $('extraLeave').value = M.extraLeave || 0;
@@ -1314,8 +1317,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     for (var d = 1; d <= nD; d++) { var hn = D.holidayName(st, y, m, d); if (hn) hol.push(d + '일 ' + hn); }
     $('holInfo').textContent = hol.length ? '공휴일: ' + hol.join(' · ') : '공휴일 없음';
 
+    // 지난달 마지막 며칠 (10-16 사용자 '10월이랑 연결성' · 자동 배치도 이 칸을 보고 이브닝 다음 데이 · 연속 근무를 막음) · 보기 전용
+    var pv = D.prevYM(y, m), PM = st.months[D.monthKey(pv.y, pv.m)], pnD = D.daysIn(pv.y, pv.m), NP = PM ? PREV_DAYS : 0;
     var h = '<table class="grid"><thead><tr><th rowspan="2" class="hire">입사일</th><th rowspan="2" class="nm">' + m + '월</th>';
     var h2 = '<tr>';
+    for (d = pnD - NP + 1; d <= pnD; d++) {
+      h += '<th class="pv' + (d === pnD ? ' pvl' : '') + '" title="지난달 (보기 전용)">' + D.DOW_KO[D.dow(pv.y, pv.m, d)] + '</th>';
+      h2 += '<th class="pv' + (d === pnD ? ' pvl' : '') + '">' + pv.m + '/' + d + '</th>';
+    }
     for (d = 1; d <= nD; d++) {
       var cls = (D.isRed(st, y, m, d) ? 'red' : D.dow(y, m, d) === 6 ? 'sat' : '') + (D.isRest(st, y, m, d) ? ' rest' : '');
       h += '<th class="' + cls + '" title="' + esc(D.holidayName(st, y, m, d)) + '">' + D.DOW_KO[D.dow(y, m, d)] + '</th>';
@@ -1326,10 +1335,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var lastG = null, rep = D.check(st, y, m), pmap = {};
     rep.persons.forEach(function (p) { pmap[p.id] = p; });
     people.forEach(function (p) {
-      if (lastG !== null && p.group !== lastG) h += '<tr class="gap"><td colspan="' + (nD + 9) + '"></td></tr>';
+      if (lastG !== null && p.group !== lastG) h += '<tr class="gap"><td colspan="' + (nD + NP + 9) + '"></td></tr>';
       lastG = p.group;
       var row = M.rows[p.id], pr = pmap[p.id];
       h += '<tr><td class="hire">' + esc(p.hire) + '</td><td class="nm" title="' + esc((D.TYPE_MAP[p.type] || {}).label) + '">' + esc(p.name) + '</td>';
+      var prow = PM && PM.rows[p.id];
+      for (d = pnD - NP + 1; d <= pnD; d++) h += '<td class="pv' + (d === pnD ? ' pvl' : '') + '" title="지난달 ' + pv.m + '/' + d + ' (보기 전용)">' + esc(prow ? prow.cells[d - 1] || '' : '') + '</td>';
       for (var d = 1; d <= nD; d++) {
         if (!D.inRange(p, y, m, d)) { h += '<td class="out" title="입사 전 · 퇴사 후"></td>'; continue; }
         var v = row.cells[d - 1] || '', c = 'c' + (row.fixed[d - 1] ? ' fx' : D.isRest(st, y, m, d) ? ' rest' : '') + (v.charAt(0) === '연' ? ' yeon' : '');
@@ -1343,9 +1354,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       h += inCell(p.id, 'carryUnpaid', row.carryUnpaid, '', 'gr') + inCell(p.id, 'carryLeave', row.carryLeave, '', 'gr') + '</tr>';
     });
     if (people.length) {
-      h += '<tr class="gap"><td colspan="' + (nD + 9) + '"></td></tr>';
+      h += '<tr class="gap"><td colspan="' + (nD + NP + 9) + '"></td></tr>';
       [['D', S.minD], ['E', S.minE], ['N', S.minN], ['M', 0]].forEach(function (it) {
-        h += '<tr class="cnt"><td></td><td class="nm">' + it[0] + ' 인원</td>';
+        h += '<tr class="cnt"><td></td><td class="nm">' + it[0] + ' 인원</td>' + (NP ? '<td class="pv pvl" colspan="' + NP + '"></td>' : '');
         rep.day.forEach(function (c) { var n = c[it[0]]; h += '<td class="' + (n < it[1] ? 'low' : '') + '">' + n + '</td>'; });
         h += '<td colspan="7"></td></tr>';
       });
