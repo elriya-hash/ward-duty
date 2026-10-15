@@ -1118,7 +1118,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     h += '</tbody></table>';
     $('gridBox').innerHTML = people.length ? h : '<div class="note" style="padding:20px">이 달에 근무하는 사람이 없습니다. \'명단\'에서 인원을 추가하세요.</div>';
 
-    // 점검 결과
+    // 점검 결과 (명단이 없으면 표시 안 함)
+    if (!people.length) { $('checkBox').innerHTML = ''; return; }
     var msgs = [], offBad = rep.persons.filter(function (p) { return p.offs !== p.target; }),
       rule = rep.persons.filter(function (p) { return p.rule.length; }), empty = rep.persons.filter(function (p) { return p.empty; });
     if (empty.length) msgs.push('<div class="alert warn"><b>빈 칸 있음</b>' + empty.map(function (p) { return esc(p.name) + ' ' + p.empty + '칸'; }).join(' · ') + '<br>→ \'자동 배치 (빈 칸만)\'으로 채우기</div>');
