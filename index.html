@@ -1222,7 +1222,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   /* ---------- 저장 · 불러오기 ---------- */
   function load() {
-    try { var s = localStorage.getItem(LS); if (s) return D.deserialize(s); } catch (e) { }
+    try { var s = localStorage.getItem(LS); if (s) { var x = D.deserialize(s); if (x && x.people && x.people.length) return x; } } catch (e) { }
+    // 병동 전용 파일: 명단 · 지난 근무가 파일 안에 들어 있음 (10-16 사용자 '명단이 자동으로 따라왔으면') · 처음 열 때 · 저장된 명단이 없을 때만
+    try { if (window.DUTY_SEED) return D.deserialize(window.DUTY_SEED); } catch (e) { }
     return D.newState();
   }
   function save() { try { localStorage.setItem(LS, D.serialize(st)); } catch (e) { } }
