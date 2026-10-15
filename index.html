@@ -49,6 +49,7 @@ table.grid .rest{background:var(--rest)}
 table.grid td.c{cursor:pointer;font-weight:bold;font-size:14px}
 table.grid td.c.fx{background:var(--yellow)}
 table.grid td.c.yeon{font-size:11px}
+table.grid td.out{background:#d9d9d9}
 table.grid td.c.selc{outline:3px solid var(--sel);outline-offset:-3px}
 table.grid td.sum{font-size:13px;min-width:38px}
 table.grid td.sum.bad{color:var(--red);font-weight:bold}
@@ -149,7 +150,8 @@ table.list input.n{width:60px}
       <p class="note">
         근무 유형: M 고정 = 평일 M · 토·일·공휴일 OFF / D 고정 · E 고정 · N 고정 / D · E = 둘 다 / D · E (D 많이) = D 를 더 많이<br>
         묶음: 근무표에서 같은 묶음끼리 모이고 묶음 사이에 빈 줄 · 주말 휴무 최소: 토·일·공휴일 중 최소로 쉬게 할 날 수 (D 고정 인원 등)<br>
-        퇴사: '퇴사일' 입력 → 그 다음 달부터 근무표에서 빠짐 (지난 근무표는 그대로) · 입사일 이전 달에는 나오지 않음
+        퇴사: '퇴사일' 입력 → 퇴사일 다음 날부터 회색 칸 · 그다음 달부터 근무표에서 빠짐 (지난 근무표는 그대로) · 달 중간 입사도 입사일 전은 회색 · 그 달 OFF 목표는 근무하는 날 수만큼 줄어듦<br>
+        인원이 줄면: 근무표 → '전체 다시 배치' → 점검 결과에 '하루 인원 부족'이 나오면 ① 설정의 하루 최소 인원 조정 ② 다른 분 근무 유형 변경 (예: E 고정 → D · E) ③ 새 입사자 '인원 추가'
       </p>
     </div>
   </section>
@@ -400,6 +402,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     activePeople(st, y, m).forEach(function (p) { if (!mon.rows[p.id]) mon.rows[p.id] = emptyRow(); });
     return mon;
   }
+  // 이 달에 근무하는 날 범위 (입사일 · 퇴사일이 달 중간이면 그 앞뒤는 빈 칸 · 10-16 사용자 '퇴사자가 생기면')
+  function dayRange(p, y, m) {
+    var nD = daysIn(y, m), h = parseYmd(p.hire), q = parseYmd(p.quit), s = 1, e = nD;
+    if (h && h.getFullYear() === y && h.getMonth() + 1 === m) s = h.getDate();
+    if (q && q.getFullYear() === y && q.getMonth() + 1 === m) e = q.getDate();
+    return { s: s, e: e, n: Math.max(0, e - s + 1) };
+  }
+  function inRange(p, y, m, d) { var r = dayRange(p, y, m); return d >= r.s && d <= r.e; }
+  // 그 달 OFF 목표 (근무하는 날이 한 달보다 짧으면 비율로 줄임 · 사람별 'OFF 목표' 칸이 있으면 그 값)
+  function effTarget(st, y, m, p) {
+    var mon = ensureMonth(st, y, m), row = mon.rows[p.id], t = targetOff(st, mon, p), r = dayRange(p, y, m), nD = daysIn(y, m);
+    if (row && row.target !== '' && row.target != null && !isNaN(+row.target)) return t;
+    return r.n === nD ? t : Math.round(t * r.n / nD);
+  }
   // 주말(토·일·공휴일) OFF 최소: 사람별 값과 Day · Eve 공통 값 중 큰 것 (M · N 고정은 사람별 값만)
   function weekendMinOf(st, p) {
     var own = +p.weekendMin || 0;
@@ -466,27 +482,30 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var MAXW = +S.maxWork || 4, MAXN = +S.maxNRun || 3, IDEAL = Math.min(+S.idealWork || 3, MAXW);
 
     var P = people.map(function (p) {
-      var row = mon.rows[p.id], base = [], fixed = [], tail = [];
+      var row = mon.rows[p.id], base = [], fixed = [], tail = [], out = [], rg = dayRange(p, y, m);
       for (var d = 0; d < nD; d++) {
         var v = row.cells[d], c = code(v);
         var fx = !!row.fixed[d] || c === C_LEAVE || (opt.onlyBlank && c !== C_EMPTY);
         if (c === C_EMPTY) fx = false;
+        var o = d + 1 < rg.s || d + 1 > rg.e; // 입사 전 · 퇴사 후
+        out.push(o);
+        if (o) { fx = true; c = C_LEAVE; row.cells[d] = ''; row.fixed[d] = false; }
         fixed.push(fx); base.push(fx ? c : C_EMPTY);
       }
       if (pmon && pmon.rows[p.id]) for (var k = Math.max(0, pnD - 7); k < pnD; k++) tail.push(code(pmon.rows[p.id].cells[k]));
       var t = TYPE_MAP[p.type] || TYPE_MAP.DE;
       return {
-        p: p, row: row, base: base, fixed: fixed, tail: tail, type: p.type,
+        p: p, row: row, base: base, fixed: fixed, tail: tail, type: p.type, out: out,
         allowed: t.shifts.map(function (s) { return code(s); }),
-        target: targetOff(st, mon, p),
-        weekendMin: weekendMinOf(st, p)
+        target: effTarget(st, y, m, p),
+        weekendMin: rg.n === nD ? weekendMinOf(st, p) : Math.floor(weekendMinOf(st, p) * rg.n / nD)
       };
     });
 
     // M 고정: 주말 · 공휴일 OFF, 나머지 M (고정 칸은 그대로)
     P.forEach(function (q) {
       if (q.type !== 'M') return;
-      for (var d = 0; d < nD; d++) if (!q.fixed[d]) { q.base[d] = rest[d] ? C_OFF : C_M; q.fixed[d] = true; }
+      for (var d = 0; d < nD; d++) if (!q.fixed[d] && !q.out[d]) { q.base[d] = rest[d] ? C_OFF : C_M; q.fixed[d] = true; }
     });
     var W = P.filter(function (q) { return q.type !== 'M'; });
     W.forEach(function (q) {
@@ -758,7 +777,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // 결과 쓰기 (고정 칸은 그대로)
     P.forEach(function (q, i) {
       for (var d = 0; d < nD; d++) {
-        if (q.row.fixed[d] || code(q.row.cells[d]) === C_LEAVE || (opt.onlyBlank && q.row.cells[d] !== '')) continue;
+        if (q.out[d] || q.row.fixed[d] || code(q.row.cells[d]) === C_LEAVE || (opt.onlyBlank && q.row.cells[d] !== '')) continue;
         q.row.cells[d] = CODE_STR[bestG[i][d]];
       }
     });
@@ -788,15 +807,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (pc === C_N && (c === C_D || c === C_E || c === C_M)) rule.push((d + 1) + '일 N 다음 ' + CODE_STR[c]);
         if (pc === C_E && c === C_D) rule.push((d + 1) + '일 E 다음 D');
       }
-      var wkOff = 0, wkMin = weekendMinOf(st, p);
+      var rg = dayRange(p, y, m), wkOff = 0, wkMin = rg.n === nD ? weekendMinOf(st, p) : Math.floor(weekendMinOf(st, p) * rg.n / nD);
       for (d = 0; d < nD; d++) { var cc = code(row.cells[d]); if (isRest(st, y, m, d + 1) && (cc === C_OFF || cc === C_LEAVE)) wkOff++; }
-      var tgt = targetOff(st, mon, p), long = [], run = 0, ideal = +S.idealWork || 3;
+      var tgt = effTarget(st, y, m, p), long = [], run = 0, ideal = +S.idealWork || 3;
       if (p.type !== 'M') for (d = 0; d <= nD; d++) {
         if (d < nD && isWork(code(row.cells[d]))) { run++; continue; }
         if (run > ideal) long.push((d - run + 1) + '~' + d + '일 ' + run + '일 연속');
         run = 0;
       }
-      persons.push({ id: p.id, name: p.name, offs: offs, target: tgt, leave: leave, rule: rule, long: long, wkOff: wkOff, wkMin: wkMin, empty: row.cells.slice(0, nD).filter(function (v) { return !v; }).length });
+      persons.push({ id: p.id, name: p.name, offs: offs, target: tgt, leave: leave, rule: rule, long: long, wkOff: wkOff, wkMin: wkMin, empty: row.cells.slice(rg.s - 1, rg.e).filter(function (v) { return !v; }).length });
     });
     return { day: day, short: short, persons: persons };
   }
@@ -897,11 +916,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       r.getCell(CO + 3).value = { formula: 'IF(COUNTIF(' + rng1 + ',"연*")=0,"",COUNTIF(' + rng1 + ',"연*"))' };
       r.getCell(CO + 4).value = numOrNull(row.carryUnpaid);
       r.getCell(CO + 5).value = numOrNull(row.carryLeave);
-      styleRow(ws, rowNo, row);
+      styleRow(ws, rowNo, row, p);
       rowNo++;
     });
     function numOrNull(v) { if (v === '' || v == null) return null; return isNaN(+v) ? String(v) : +v; }
-    function styleRow(ws, rn, row) {
+    function styleRow(ws, rn, row, person) {
       var r = ws.getRow(rn);
       for (var c = 1; c <= lastCol; c++) {
         var cell = r.getCell(c);
@@ -910,7 +929,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         cell.font = { name: FONT, size: c === 1 ? 8 : c === 2 ? 13 : 13, bold: c === 2 };
         if (c >= C0 && c <= CL) {
           var d = c - C0 + 1, v = row ? row.cells[d - 1] : '';
-          if (row && row.fixed[d - 1]) cell.fill = fill(COLOR.yellow);
+          if (person && !inRange(person, y, m, d)) cell.fill = fill('FFD9D9D9');
+          else if (row && row.fixed[d - 1]) cell.fill = fill(COLOR.yellow);
           else if (isRest(st, y, m, d)) cell.fill = fill(COLOR.restFill);
           if (v === 'N' && false) cell.font = { name: FONT, size: 13, color: { argb: COLOR.red } };
           if (v && String(v).charAt(0) === '연') cell.font = { name: FONT, size: 10 };
@@ -944,7 +964,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var lastRow = rowNo - 1;
     // OFF 목표와 다르면 off 칸 빨간 글자
     personRows.forEach(function (rn) {
-      var p = people[personRows.indexOf(rn)], tgt = targetOff(st, mon, p);
+      var p = people[personRows.indexOf(rn)], tgt = effTarget(st, y, m, p);
       ws.addConditionalFormatting({
         ref: colLetter(CO) + rn,
         rules: [{ type: 'cellIs', operator: 'notEqual', formulae: [String(tgt)], style: { font: { color: { argb: 'FFC00000' }, bold: true } } }]
@@ -1037,7 +1057,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     VERSION: VERSION, TYPES: TYPES, TYPE_MAP: TYPE_MAP, SHIFT_INFO: SHIFT_INFO, REQ_KINDS: REQ_KINDS, DOW_KO: DOW_KO,
     newState: newState, defaultSettings: defaultSettings, monthKey: monthKey, parseKey: parseKey, daysIn: daysIn, dow: dow,
     prevYM: prevYM, holidayName: holidayName, isRed: isRed, isRest: isRest, restCount: restCount, parseYmd: parseYmd,
-    addPerson: addPerson, activePeople: activePeople, findPersonByName: findPersonByName, defaultGroup: defaultGroup,
+    addPerson: addPerson, activePeople: activePeople, inRange: inRange, effTarget: effTarget, findPersonByName: findPersonByName, defaultGroup: defaultGroup,
     ensureMonth: ensureMonth, targetOff: targetOff, code: code, applyRequests: applyRequests, schedule: schedule,
     check: check, serialize: serialize, deserialize: deserialize, buildWorkbook: buildWorkbook, readWorkbook: readWorkbook
   };
@@ -1164,12 +1184,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var row = M.rows[p.id], pr = pmap[p.id];
       h += '<tr><td class="hire">' + esc(p.hire) + '</td><td class="nm" title="' + esc((D.TYPE_MAP[p.type] || {}).label) + '">' + esc(p.name) + '</td>';
       for (var d = 1; d <= nD; d++) {
+        if (!D.inRange(p, y, m, d)) { h += '<td class="out" title="입사 전 · 퇴사 후"></td>'; continue; }
         var v = row.cells[d - 1] || '', c = 'c' + (row.fixed[d - 1] ? ' fx' : D.isRest(st, y, m, d) ? ' rest' : '') + (v.charAt(0) === '연' ? ' yeon' : '');
         if (sel && sel.pid === p.id && sel.d === d) c += ' selc';
         h += '<td class="' + c + '" data-p="' + p.id + '" data-d="' + d + '">' + esc(v) + '</td>';
       }
       h += '<td class="sum' + (pr.offs !== pr.target ? ' bad' : '') + '" title="목표 ' + pr.target + '">' + pr.offs + '</td>';
-      h += inCell(p.id, 'target', row.target, D.targetOff(st, M, p));
+      h += inCell(p.id, 'target', row.target, D.effTarget(st, y, m, p));
       h += inCell(p.id, 'mioff', row.mioff) + inCell(p.id, 'sunoff', row.sunoff);
       h += '<td class="sum">' + (pr.leave || '') + '</td>';
       h += inCell(p.id, 'carryUnpaid', row.carryUnpaid, '', 'gr') + inCell(p.id, 'carryLeave', row.carryLeave, '', 'gr') + '</tr>';
